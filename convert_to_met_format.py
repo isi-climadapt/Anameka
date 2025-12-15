@@ -180,8 +180,13 @@ year  day radn  maxt   mint  rain  evap    vp   code
             else:
                 code_str = "      "  # 6 spaces
             
+            # Handle NaN values for maxt, mint, rain - use 0.0 as default
+            maxt_val = row['maxt'] if pd.notna(row['maxt']) else 0.0
+            mint_val = row['mint'] if pd.notna(row['mint']) else 0.0
+            rain_val = row['rain'] if pd.notna(row['rain']) else 0.0
+            
             # Format with proper column widths: year(4) day(4) radn(6) maxt(6) mint(6) rain(6) evap(6) vp(6) code(6)
-            line = f"{int(row['year']):4d} {int(row['day']):4d} {radn_str} {row['maxt']:6.1f} {row['mint']:6.1f} {row['rain']:6.1f} {evap_str} {vp_str} {code_str}\n"
+            line = f"{int(row['year']):4d} {int(row['day']):4d} {radn_str} {maxt_val:6.1f} {mint_val:6.1f} {rain_val:6.1f} {evap_str} {vp_str} {code_str}\n"
             f.write(line)
     
     print(f"  [OK] Created MET file: {output_filename}")
