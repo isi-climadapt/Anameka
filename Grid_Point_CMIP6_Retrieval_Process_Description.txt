@@ -1,0 +1,528 @@
+================================================================================
+GRID POINT CMIP6 RETRIEVAL AND MET CONVERSION PROCESS
+================================================================================
+
+OVERVIEW
+--------
+This process extracts climate data from CMIP6 NetCDF files for a user-specified 
+coordinate and converts it to APSIM MET format for agricultural simulation modeling.
+
+The workflow combines:
+1. NetCDF data extraction from CMIP6 climate model datasets
+2. Coordinate-based grid point selection
+3. Time series data extraction for multiple climate variables
+4. Conversion to APSIM MET format with proper unit conversions
+
+================================================================================
+FILES INCLUDED
+================================================================================
+
+1. Grid_point_CMIP6_retrieval.ipynb
+   - Jupyter notebook with interactive cells
+   - Step-by-step execution with configuration display
+   - Best for interactive use and exploration
+
+2. Grid point retrieval CMIP6 ACCESS M2.py
+   - Standalone Python script
+   - Can be run directly from command line
+   - Best for automated processing and batch runs
+
+================================================================================
+INPUT DATA STRUCTURE
+================================================================================
+
+CMIP6 data is organized in the following structure:
+
+C:\Users\ibian\Desktop\ClimAdapt\CMIP6\
+    └── {Model} {Scenario}\
+        ├── tasmax_{Model} {Scenario}\
+        │   ├── *.nc files (one per year)
+        ├── tasmin_{Model} {Scenario}\
+        │   ├── *.nc files (one per year)
+        ├── pr_{Model} {Scenario}\
+        │   ├── *.nc files (one per year)
+        └── rsds_{Model} {Scenario}\
+            ├── *.nc files (one per year)
+
+Example:
+C:\Users\ibian\Desktop\ClimAdapt\CMIP6\
+    └── ACCESS CM2 SSP245\
+        ├── tasmax_ACCESS CM2 SSP245\
+        │   ├── tasmax_*.nc (yearly files)
+        ├── tasmin_ACCESS CM2 SSP245\
+        │   ├── tasmin_*.nc (yearly files)
+        ├── pr_ACCESS CM2 SSP245\
+        │   ├── pr_*.nc (yearly files)
+        └── rsds_ACCESS CM2 SSP245\
+            ├── rsds_*.nc (yearly files)
+
+================================================================================
+VARIABLES PROCESSED
+================================================================================
+
+The process extracts and processes 4 climate variables:
+
+1. tasmax (Daily Maximum Temperature)
+   - Units: Degrees Celsius (°C)
+   - MET Format: maxt
+   - Required for MET file
+
+2. tasmin (Daily Minimum Temperature)
+   - Units: Degrees Celsius (°C)
+   - MET Format: mint
+   - Required for MET file
+
+3. pr (Daily Precipitation)
+   - Units: Millimeters (mm)
+   - MET Format: rain
+   - Required for MET file
+
+4. rsds (Daily Surface Downwelling Shortwave Radiation)
+   - Units: Watts per square meter (W/m²)
+   - MET Format: radn (converted to MJ/m²)
+   - Conversion: Multiply by 0.0864 to convert W/m² to MJ/m²
+   - Optional for MET file
+
+Note: vp (vapor pressure) and code (data quality code) fields are left blank 
+in the MET format output.
+
+================================================================================
+CONFIGURATION PARAMETERS
+================================================================================
+
+Before running, configure the following parameters:
+
+1. CMIP6_BASE_DIR
+   - Base directory containing Model Scenario folders
+   - Default: C:\Users\ibian\Desktop\ClimAdapt\CMIP6
+
+2. OUTPUT_DIR
+   - Directory where output files will be saved
+   - Default: C:\Users\ibian\Desktop\ClimAdapt\Anameka\Anameka_South_16_226042
+
+3. MODEL
+   - Climate model name (must match folder name)
+   - Example: "ACCESS CM2"
+
+4. SCENARIO
+   - Shared Socioeconomic Pathway scenario
+   - Examples: "SSP245", "SSP585"
+
+5. LATITUDE
+   - Target latitude in decimal degrees
+   - Range: -90 to 90
+   - Example: -31.75
+
+6. LONGITUDE
+   - Target longitude in decimal degrees
+   - Range: -180 to 180
+   - Example: 117.5999984741211
+
+7. COORD_TOLERANCE
+   - Coordinate matching tolerance in degrees
+   - Default: 0.01 degrees (approximately 1.1 km)
+   - The script finds the nearest grid point within this tolerance
+
+================================================================================
+PROCESSING WORKFLOW
+================================================================================
+
+STEP 1: Configuration and Setup
+---------------------------------
+- Import required libraries (pandas, numpy, xarray, etc.)
+- Set configuration parameters (Model, Scenario, coordinates)
+- Validate coordinate ranges
+- Display configuration summary
+
+STEP 2: NetCDF File Discovery
+------------------------------
+For each variable (tasmax, tasmin, pr, rsds):
+- Search for NetCDF files matching the variable pattern
+- Check multiple directory structures:
+  * Direct files: *{variable}*.nc
+  * Subdirectory: {variable}_{Model} {Scenario}/*.nc
+  * Variable folder: {variable}/*.nc
+- Report number of files found
+
+STEP 3: Grid Point Identification
+-----------------------------------
+- Open first NetCDF file to determine coordinate structure
+- Identify latitude and longitude coordinate names
+- Find nearest grid point to user-specified coordinates
+- Cache grid point indices for efficient processing
+- Check if nearest point is within tolerance
+- Display actual grid point coordinates used
+
+STEP 4: Data Extraction
+------------------------
+For each NetCDF file:
+- Extract time series data for the identified grid point
+- Handle date extraction using multiple methods:
+  * Method 1: Use time coordinate from NetCDF (most reliable)
+  * Method 2: Extract year from filename and create date range
+- Automatically handle leap years (366 days) and non-leap years (365 days)
+- Combine data from all files into single DataFrame
+- Sort by date and remove duplicates
+
+STEP 5: Data Export
+-------------------
+- Save individual variable CSV files
+- Format: {Model}_{Scenario}_{Lat}_{Lon}_{variable}.csv
+- Example: ACCESS_CM2_SSP245_-31.75_117.60_tasmax.csv
+
+STEP 6: MET File Creation
+--------------------------
+- Merge tasmax, tasmin, pr dataframes
+- Add rsds data if available (convert W/m² to MJ/m²)
+- Calculate tav (annual average temperature)
+- Calculate amp (annual amplitude in mean monthly temperature)
+- Create MET format header with metadata
+- Format data rows with proper spacing
+- Save MET file: {Model}_{Scenario}_{Lat}_{Lon}.met
+- Save CSV version: {Model}_{Scenario}_{Lat}_{Lon}.csv
+
+STEP 7: Summary and Validation
+--------------------------------
+- Display processing summary
+- Report number of records extracted
+- Show date range covered
+- Display calculated tav and amp values
+- List all output files created
+
+================================================================================
+OUTPUT FILES
+================================================================================
+
+The process generates the following output files:
+
+1. MET File (APSIM format)
+   - Filename: {Model}_{Scenario}_{Lat}_{Lon}.met
+   - Example: ACCESS_CM2_SSP245_-31.75_117.60.met
+   - Contains: Header with metadata, daily climate data
+   - Format: Fixed-width columns with proper spacing
+
+2. CSV File (MET data structure)
+   - Filename: {Model}_{Scenario}_{Lat}_{Lon}.csv
+   - Example: ACCESS_CM2_SSP245_-31.75_117.60.csv
+   - Contains: Same data as MET file in CSV format
+   - Format: Comma-separated values
+
+3. Individual Variable CSV Files (4 files)
+   - Filenames: {Model}_{Scenario}_{Lat}_{Lon}_{variable}.csv
+   - Examples:
+     * ACCESS_CM2_SSP245_-31.75_117.60_tasmax.csv
+     * ACCESS_CM2_SSP245_-31.75_117.60_tasmin.csv
+     * ACCESS_CM2_SSP245_-31.75_117.60_pr.csv
+     * ACCESS_CM2_SSP245_-31.75_117.60_rsds.csv
+   - Contains: Date and value columns for each variable
+   - Format: CSV with date and value columns
+
+================================================================================
+MET FORMAT SPECIFICATIONS
+================================================================================
+
+APSIM MET Format Structure:
+
+Header Section:
+- [weather.met.weather]
+- latitude (decimal degrees)
+- longitude (decimal degrees)
+- tav (annual average ambient temperature in °C)
+- amp (annual amplitude in mean monthly temperature in °C)
+- Metadata comments
+
+Data Section:
+Columns (in order):
+1. year - Year (4 digits)
+2. day - Day of year (1-365 or 1-366)
+3. radn - Radiation (MJ/m², optional, blank if not available)
+4. maxt - Maximum temperature (°C)
+5. mint - Minimum temperature (°C)
+6. rain - Precipitation (mm)
+7. evap - Evaporation (mm, left blank)
+8. vp - Vapor pressure (hPa, left blank)
+9. code - Data quality code (left blank)
+
+Column Widths:
+- year: 4 characters
+- day: 4 characters
+- radn: 6 characters (or blank)
+- maxt: 6 characters
+- mint: 6 characters
+- rain: 6 characters
+- evap: 6 characters (blank)
+- vp: 6 characters (blank)
+- code: 6 characters (blank)
+
+================================================================================
+UNIT CONVERSIONS
+================================================================================
+
+1. rsds (Radiation)
+   - Input: W/m² (Watts per square meter)
+   - Output: MJ/m² (Megajoules per square meter)
+   - Conversion factor: 0.0864
+   - Formula: MJ/m² = W/m² × 0.0864
+   - Explanation: Multiply by seconds per day (86400) and divide by 1,000,000
+
+2. Temperature
+   - No conversion needed
+   - Input: °C (Celsius)
+   - Output: °C (Celsius)
+
+3. Precipitation
+   - No conversion needed
+   - Input: mm (millimeters)
+   - Output: mm (millimeters)
+
+================================================================================
+LEAP YEAR HANDLING
+================================================================================
+
+The process automatically handles leap years correctly:
+
+- Non-leap years: Extracts 365 days (Jan 1 - Dec 31)
+- Leap years: Extracts 366 days (Jan 1 - Dec 31, including Feb 29)
+
+Date extraction methods:
+1. Uses time coordinate from NetCDF file if available (most reliable)
+2. Falls back to extracting year from filename and creating date range
+3. Uses actual data length to determine number of days
+4. pd.date_range with freq='D' automatically handles leap years
+
+Examples:
+- 2023 (non-leap year): 365 days
+- 2024 (leap year): 366 days (includes Feb 29)
+- 2025 (non-leap year): 365 days
+
+================================================================================
+COORDINATE MATCHING
+================================================================================
+
+The process finds the nearest grid point to user-specified coordinates:
+
+1. User provides target latitude and longitude
+2. Script searches NetCDF coordinate arrays
+3. Finds grid point with minimum distance to target
+4. Checks if distance is within tolerance (default: 0.01 degrees)
+5. Uses actual grid point coordinates for data extraction
+
+Tolerance:
+- Default: 0.01 degrees
+- Approximately 1.1 km at the equator
+- Warning displayed if nearest point exceeds tolerance
+
+Example:
+- Target: (-31.75, 117.5999984741211)
+- Nearest grid point: (-31.7500, 117.6000)
+- Distance: Within tolerance
+- Result: Uses grid point (-31.7500, 117.6000)
+
+================================================================================
+ERROR HANDLING
+================================================================================
+
+The process includes error handling for common issues:
+
+1. Missing Files
+   - Checks if data directory exists
+   - Searches multiple file patterns
+   - Reports error if no files found
+
+2. Missing Variables
+   - Validates that required variables (tasmax, tasmin, pr) are extracted
+   - Reports error if required variables are missing
+   - MET file creation skipped if required variables unavailable
+
+3. Coordinate Validation
+   - Validates latitude range (-90 to 90)
+   - Validates longitude range (-180 to 180)
+   - Raises error if coordinates are invalid
+
+4. File Processing Errors
+   - Continues processing if individual files fail
+   - Reports errors for problematic files
+   - Combines successfully processed data
+
+5. Date Extraction Errors
+   - Falls back to alternative date extraction methods
+   - Uses filename-based year extraction if time coordinate fails
+   - Handles partial years and missing dates
+
+================================================================================
+USAGE INSTRUCTIONS
+================================================================================
+
+USING THE NOTEBOOK (Grid_point_CMIP6_retrieval.ipynb):
+-------------------------------------------------------
+1. Open the notebook in Jupyter or VS Code
+2. Run cells sequentially:
+   - Cell 1: Import libraries
+   - Cell 2: Set configuration (Model, Scenario, Variables)
+   - Cell 3: Set coordinates (Latitude, Longitude)
+   - Cell 4: Define extraction function
+   - Cell 5: Define MET conversion functions
+   - Cell 6: Define main processing function
+   - Cell 7: Display configuration summary
+   - Cell 8: Execute main processing
+3. Review configuration before running
+4. Check output files in OUTPUT_DIR
+
+USING THE PYTHON SCRIPT (Grid point retrieval CMIP6 ACCESS M2.py):
+-------------------------------------------------------------------
+1. Edit configuration section at top of script:
+   - Set MODEL, SCENARIO, LATITUDE, LONGITUDE
+   - Set OUTPUT_DIR if needed
+2. Run from command line:
+   python "Grid point retrieval CMIP6 ACCESS M2.py"
+3. Script will:
+   - Display configuration
+   - Process all variables
+   - Create output files
+   - Display summary
+
+================================================================================
+EXAMPLE CONFIGURATION
+================================================================================
+
+For ACCESS CM2 SSP245 scenario at coordinates (-31.75, 117.5999984741211):
+
+Configuration:
+--------------
+CMIP6_BASE_DIR = r"C:\Users\ibian\Desktop\ClimAdapt\CMIP6"
+OUTPUT_DIR = r"C:\Users\ibian\Desktop\ClimAdapt\Anameka\Anameka_South_16_226042"
+MODEL = "ACCESS CM2"
+SCENARIO = "SSP245"
+LATITUDE = -31.75
+LONGITUDE = 117.5999984741211
+COORD_TOLERANCE = 0.01
+VARIABLES = ['tasmax', 'tasmin', 'pr', 'rsds']
+
+Expected Output Files:
+----------------------
+1. ACCESS_CM2_SSP245_-31.75_117.60.met
+2. ACCESS_CM2_SSP245_-31.75_117.60.csv
+3. ACCESS_CM2_SSP245_-31.75_117.60_tasmax.csv
+4. ACCESS_CM2_SSP245_-31.75_117.60_tasmin.csv
+5. ACCESS_CM2_SSP245_-31.75_117.60_pr.csv
+6. ACCESS_CM2_SSP245_-31.75_117.60_rsds.csv
+
+================================================================================
+CALCULATIONS PERFORMED
+================================================================================
+
+1. tav (Annual Average Temperature)
+   - Calculated from daily mean temperature
+   - Mean of all daily values: (maxt + mint) / 2
+   - Formula: tav = mean(tmean) over all days
+
+2. amp (Annual Amplitude)
+   - Calculated from monthly mean temperatures
+   - Step 1: Calculate monthly means for each year
+   - Step 2: Average all January monthly means
+   - Step 3: Average all July monthly means
+   - Formula: amp = (mean(January_means) - mean(July_means)) / 2
+
+================================================================================
+PERFORMANCE CONSIDERATIONS
+================================================================================
+
+Processing Time:
+- Depends on number of files and file sizes
+- Typical: 1-5 minutes per variable
+- Progress bars show real-time progress
+
+Memory Usage:
+- Processes files one at a time to minimize memory
+- Combines data after all files processed
+- Efficient for large datasets
+
+Optimization Features:
+- Caches coordinate indices from first file
+- Uses minimal NetCDF decoding for speed
+- Processes files in sorted order
+- Removes duplicates efficiently
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Common Issues and Solutions:
+
+1. "No NetCDF files found"
+   - Check that data directory exists
+   - Verify Model and Scenario names match folder structure
+   - Check file naming patterns
+
+2. "Nearest point outside tolerance"
+   - Increase COORD_TOLERANCE if needed
+   - Verify coordinates are correct
+   - Check if data exists for that region
+
+3. "Missing required variables"
+   - Ensure tasmax, tasmin, and pr files exist
+   - Check file naming matches variable names
+   - Verify files are not corrupted
+
+4. "Date extraction errors"
+   - Check NetCDF file structure
+   - Verify time coordinate exists
+   - Check filename contains year information
+
+5. "Memory errors"
+   - Process fewer files at once
+   - Increase system memory
+   - Process variables separately
+
+================================================================================
+DEPENDENCIES
+================================================================================
+
+Required Python Packages:
+- pandas: Data manipulation and CSV export
+- numpy: Numerical operations
+- xarray: NetCDF file reading
+- tqdm: Progress bars
+- pathlib: Path handling
+- datetime: Date handling
+- glob: File pattern matching
+- os: Operating system interface
+- re: Regular expressions
+- time: Timing functions
+
+Installation:
+pip install pandas numpy xarray tqdm
+
+================================================================================
+VERSION INFORMATION
+================================================================================
+
+Script Version: 1.0
+Created: 2025
+Last Updated: 2025
+
+Features:
+- CMIP6 NetCDF data extraction
+- Coordinate-based grid point selection
+- Multiple variable processing (tasmax, tasmin, pr, rsds)
+- MET format conversion
+- Leap year handling
+- Unit conversions
+- Error handling
+- Progress reporting
+
+================================================================================
+CONTACT AND SUPPORT
+================================================================================
+
+For issues or questions:
+- Check error messages in output
+- Review configuration settings
+- Verify input data structure
+- Check file permissions
+
+Repository: https://github.com/isi-climadapt/Anameka.git
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================
