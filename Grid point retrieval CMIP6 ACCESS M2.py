@@ -454,19 +454,8 @@ def create_met_file(tasmax_df, tasmin_df, pr_df, rsds_df, hurs_df=None, scenario
     merged = merged.rename(columns={'value_mj': 'radn'})
     
     # Calculate vp (vapor pressure) if hurs is provided, otherwise leave blank
-    if hurs_df is not None and len(hurs_df) > 0:
-        # Calculate VP using SILO method
-        vp_df = calculate_vapor_pressure(hurs_df, tasmax_df, tasmin_df)
-        vp_df['date'] = pd.to_datetime(vp_df['date'])
-        merged = merged.merge(vp_df[['date', 'value']], on='date', how='outer')
-        merged = merged.rename(columns={'value': 'vp'})
-        # Ensure VP is numeric
-        merged['vp'] = pd.to_numeric(merged['vp'], errors='coerce')
-        print(f"  [OK] Calculated vapor pressure from hurs data")
-    else:
-        # vp (vapor pressure) is left blank if hurs not available
-        merged['vp'] = ''
-        print(f"  [INFO] hurs not provided - VP left blank")
+    # NOTE: VP calculation will happen AFTER date range extension to ensure all days are included
+    # We'll calculate VP later after forward-filling hurs data
     
     # Sort by date
     merged = merged.sort_values('date').reset_index(drop=True)
@@ -501,9 +490,6 @@ def create_met_file(tasmax_df, tasmin_df, pr_df, rsds_df, hurs_df=None, scenario
     # Fill missing values for numeric columns using forward fill then backward fill
     # This handles gaps in the data gracefully
     numeric_cols = ['maxt', 'mint', 'rain', 'radn']
-    # Add vp to numeric columns if it was calculated (not blank)
-    if 'vp' in merged.columns and merged['vp'].dtype != 'object':
-        numeric_cols.append('vp')
     for col in numeric_cols:
         if col in merged.columns:
             # Forward fill first, then backward fill to handle gaps at start/end
@@ -511,9 +497,57 @@ def create_met_file(tasmax_df, tasmin_df, pr_df, rsds_df, hurs_df=None, scenario
             # If still NaN, fill with 0 (shouldn't happen, but safety check)
             merged[col] = merged[col].fillna(0.0)
     
+    # Calculate VP AFTER date range extension and forward-filling
+    # This ensures VP can be calculated for all days, including day 366
+    if hurs_df is not None and len(hurs_df) > 0:
+        # Prepare hurs, tasmax, and tasmin dataframes with complete date range
+        # Forward-fill missing values so VP can be calculated for all dates
+        hurs_complete = pd.DataFrame({'date': complete_date_range})
+        hurs_df_copy = hurs_df.copy()
+        hurs_df_copy['date'] = pd.to_datetime(hurs_df_copy['date'])
+        hurs_complete = hurs_complete.merge(hurs_df_copy[['date', 'value']], on='date', how='left')
+        hurs_complete = hurs_complete.sort_values('date').reset_index(drop=True)
+        hurs_complete['value'] = hurs_complete['value'].ffill().bfill()  # Forward/backward fill hurs
+        
+        tasmax_complete = pd.DataFrame({'date': complete_date_range})
+        tasmax_df_copy = tasmax_df.copy()
+        tasmax_df_copy['date'] = pd.to_datetime(tasmax_df_copy['date'])
+        tasmax_complete = tasmax_complete.merge(tasmax_df_copy[['date', 'value']], on='date', how='left')
+        tasmax_complete = tasmax_complete.sort_values('date').reset_index(drop=True)
+        tasmax_complete['value'] = tasmax_complete['value'].ffill().bfill()  # Forward/backward fill tasmax
+        
+        tasmin_complete = pd.DataFrame({'date': complete_date_range})
+        tasmin_df_copy = tasmin_df.copy()
+        tasmin_df_copy['date'] = pd.to_datetime(tasmin_df_copy['date'])
+        tasmin_complete = tasmin_complete.merge(tasmin_df_copy[['date', 'value']], on='date', how='left')
+        tasmin_complete = tasmin_complete.sort_values('date').reset_index(drop=True)
+        tasmin_complete['value'] = tasmin_complete['value'].ffill().bfill()  # Forward/backward fill tasmin
+        
+        # Calculate VP using SILO method with forward-filled data
+        vp_df = calculate_vapor_pressure(hurs_complete, tasmax_complete, tasmin_complete)
+        vp_df['date'] = pd.to_datetime(vp_df['date'])
+        
+        # Merge VP into merged dataframe (using index since merged is indexed by date)
+        vp_df_indexed = vp_df.set_index('date')
+        merged['vp'] = vp_df_indexed['value']
+        # Ensure VP is numeric
+        merged['vp'] = pd.to_numeric(merged['vp'], errors='coerce')
+        
+        # Count how many VP values were calculated
+        vp_calculated = merged['vp'].notna().sum()
+        print(f"  [OK] Calculated vapor pressure for {vp_calculated} days (including forward-filled hurs for missing dates)")
+    else:
+        # vp (vapor pressure) is left blank if hurs not available
+        merged['vp'] = np.nan
+        print(f"  [INFO] hurs not provided - VP left blank")
+    
     # Reset index to get date back as a column
     merged = merged.reset_index()
     merged = merged.rename(columns={'index': 'date'})
+    
+    # Ensure VP column exists and handle any remaining NaN values
+    if 'vp' not in merged.columns:
+        merged['vp'] = np.nan
     
     # Calculate tav and amp (use only non-NaN values for calculation)
     merged_temp = merged[['date', 'maxt', 'mint']].copy()
@@ -525,6 +559,30 @@ def create_met_file(tasmax_df, tasmin_df, pr_df, rsds_df, hurs_df=None, scenario
     merged['year'] = merged['date'].dt.year
     merged['day'] = merged['date'].dt.dayofyear
     
+    # FIX: Copy VP value from day 365 to day 366 for leap years
+    # This ensures day 366 has a VP value even if hurs data doesn't exist for that date
+    if 'vp' in merged.columns:
+        # Find all day 366 rows (leap year days)
+        day366_mask = merged['day'] == 366
+        day366_rows = merged[day366_mask].copy()
+        
+        if len(day366_rows) > 0:
+            # For each day 366, copy VP from day 365 of the same year
+            for idx in day366_rows.index:
+                year = merged.loc[idx, 'year']
+                # Find day 365 of the same year
+                day365_mask = (merged['year'] == year) & (merged['day'] == 365)
+                day365_rows = merged[day365_mask]
+                
+                if len(day365_rows) > 0:
+                    # Copy VP value from day 365 to day 366
+                    vp_day365 = merged.loc[day365_rows.index[0], 'vp']
+                    # Only copy if day 366 VP is NaN or empty
+                    vp_day366 = merged.loc[idx, 'vp']
+                    if pd.isna(vp_day366) or vp_day366 == '':
+                        merged.loc[idx, 'vp'] = vp_day365
+                        print(f"  [INFO] Copied VP value from day 365 to day 366 for year {year}: {vp_day365:.2f} hPa")
+    
     # Add empty columns for evap and code
     merged['evap'] = ''  # Leave blank
     merged['code'] = '222222'  # Hardcoded code value for all rows
@@ -532,19 +590,54 @@ def create_met_file(tasmax_df, tasmin_df, pr_df, rsds_df, hurs_df=None, scenario
     # Ensure vp column exists (should already be set above)
     if 'vp' not in merged.columns:
         merged['vp'] = ''
-    # If VP is numeric (calculated), keep it numeric; if string (blank), keep as string
-    # This will be handled in the formatting section
     
-    # Select and order columns for MET format
-    # Convert VP to appropriate format: numeric if calculated, empty string if blank
-    if merged['vp'].dtype == 'object':
-        # VP is blank (string), keep as is
-        pass
-    else:
-        # VP is numeric (calculated), ensure it's float
-        merged['vp'] = merged['vp'].astype(float)
+    # VP should now be calculated for all dates (including day 366)
+    # No need to convert to empty string - VP should have numeric values
+    # Only convert NaN to empty string if hurs was not provided at all
+    if 'vp' in merged.columns:
+        if hurs_df is None or len(hurs_df) == 0:
+            # If hurs was not provided, VP should be empty string
+            merged['vp'] = merged['vp'].astype(object)
+            merged.loc[merged['vp'].isna(), 'vp'] = ''
+        else:
+            # VP should be numeric (calculated from forward-filled hurs)
+            # Fill any remaining NaN with the last valid value (shouldn't happen, but safety check)
+            merged['vp'] = merged['vp'].ffill().bfill()
+            # If still NaN (shouldn't happen), convert to empty string
+            if merged['vp'].isna().any():
+                merged['vp'] = merged['vp'].astype(object)
+                merged.loc[merged['vp'].isna(), 'vp'] = ''
     
+    # Check for blank VP values and issue warning
+    vp_blank_count = ((merged['vp'] == '') | (merged['vp'].isna())).sum()
+    if vp_blank_count > 0:
+        # Find which years have blank VP values
+        blank_vp_dates = merged[((merged['vp'] == '') | (merged['vp'].isna())) & merged['date'].notna()]
+        if len(blank_vp_dates) > 0:
+            blank_years = sorted(blank_vp_dates['date'].dt.year.unique())
+            years_str = ', '.join(map(str, blank_years))
+            print(f"  [WARNING] Found {vp_blank_count} days with blank VP values (missing hurs data)")
+            print(f"  [WARNING] Years affected: {years_str}")
+            print(f"  [WARNING] These VP values will appear as blank spaces in the output files")
+    
+    # Create met_data - VP should now be numeric (calculated from forward-filled hurs)
     met_data = merged[['year', 'day', 'radn', 'maxt', 'mint', 'rain', 'evap', 'vp', 'code']].copy()
+    # VP should be numeric if hurs was provided, otherwise empty string
+    if 'vp' in met_data.columns:
+        if hurs_df is None or len(hurs_df) == 0:
+            # If hurs was not provided, VP should be empty string
+            met_data['vp'] = met_data['vp'].astype(object)
+            met_data.loc[met_data['vp'].isna(), 'vp'] = ''
+        else:
+            # VP should be numeric - ensure it's float
+            met_data['vp'] = pd.to_numeric(met_data['vp'], errors='coerce')
+            # Fill any remaining NaN (shouldn't happen after forward-fill)
+            if met_data['vp'].isna().any():
+                met_data['vp'] = met_data['vp'].ffill().bfill()
+                # If still NaN, convert to empty string
+                if met_data['vp'].isna().any():
+                    met_data['vp'] = met_data['vp'].astype(object)
+                    met_data.loc[met_data['vp'].isna(), 'vp'] = ''
     
     # Prepare header
     current_date = datetime.now().strftime('%Y%m%d')
@@ -600,10 +693,14 @@ year  day radn  maxt   mint  rain  evap    vp   code
             else:
                 evap_str = "      "  # 6 spaces
                 
-            # Handle VP - can be numeric (calculated) or empty string (blank)
-            if pd.notna(row['vp']) and row['vp'] != '':
+            # Handle VP - should be numeric (calculated) or empty string (if hurs not provided)
+            vp_val = row['vp']
+            is_blank = (vp_val == '' or pd.isna(vp_val) or vp_val is None or 
+                       (isinstance(vp_val, float) and np.isnan(vp_val)))
+            
+            if not is_blank:
                 try:
-                    vp_str = f"{float(row['vp']):6.1f}"
+                    vp_str = f"{float(vp_val):6.1f}"
                 except (ValueError, TypeError):
                     vp_str = "      "  # 6 spaces
             else:
@@ -621,6 +718,9 @@ year  day radn  maxt   mint  rain  evap    vp   code
             line = f"{int(row['year']):4d} {int(row['day']):4d} {radn_str} {maxt_val:6.1f} {mint_val:6.1f} {rain_val:6.1f} {evap_str} {vp_str} {code_str}\n"
             f.write(line)
     
+    # Count blank VP values in final output for warning (after file is written)
+    final_blank_vp = ((met_data['vp'] == '') | (met_data['vp'].isna())).sum()
+    
     # Verify complete date coverage
     years = met_data['year'].unique()
     total_days = len(met_data)
@@ -635,12 +735,26 @@ year  day radn  maxt   mint  rain  evap    vp   code
     else:
         print(f"  [WARNING] Day count mismatch - may need investigation")
     
+    # Final warning about blank VP values
+    if final_blank_vp > 0:
+        blank_years_list = sorted(met_data[((met_data['vp'] == '') | (met_data['vp'].isna()))]['year'].unique())
+        years_str = ', '.join(map(str, blank_years_list))
+        print(f"  [WARNING] ========================================")
+        print(f"  [WARNING] BLANK VP VALUES DETECTED!")
+        print(f"  [WARNING] {final_blank_vp} days have blank VP values (missing hurs data)")
+        print(f"  [WARNING] Affected years: {years_str}")
+        print(f"  [WARNING] These will appear as blank spaces in MET/CSV files")
+        print(f"  [WARNING] ========================================")
+    
     # Also create CSV version with same structure
     csv_filename = f"{model_scenario}_{lat_str}_{lon_str}.csv"
     csv_path = os.path.join(output_dir, csv_filename)
     
     # Write CSV (without header comments, just data)
-    met_data.to_csv(csv_path, index=False, encoding='utf-8', float_format='%.1f')
+    csv_data = met_data.copy()
+    # VP should be numeric if hurs was provided, otherwise empty string
+    # Use na_rep='' to ensure empty strings/NaN are written as empty cells
+    csv_data.to_csv(csv_path, index=False, encoding='utf-8', float_format='%.1f', na_rep='')
     print(f"  [OK] Created CSV file: {csv_filename}")
     
     return tav, amp, len(met_data)
